@@ -31,7 +31,8 @@ from matplotlib.colors import ListedColormap
 app = Flask(__name__)
 Bootstrap(app)
 
-models_base_folder = "/Users/chenhang/Downloads/models"
+# models_base_folder = "/Users/chenhang/Downloads/models"
+models_base_folder = "/Users/chenhang/Downloads/models_4_mal"
 
 @app.route("/", methods=['GET', 'POST'])
 def main():
@@ -41,9 +42,9 @@ def main():
 
     # get selections from front-end
     client1 = request.form.get('clients1') if request.form.get('clients1') else "globals_0"
-    client2 = request.form.get('clients2') if request.form.get('clients2') else "globals_0"
+    client2 = request.form.get('clients2') if request.form.get('clients2') else "client_7"
     round1 = request.form.get('rounds1') if request.form.get('rounds1') else 0
-    round2 = request.form.get('rounds2') if request.form.get('rounds2') else 0
+    round2 = request.form.get('rounds2') if request.form.get('rounds2') else 1
     top_or_low = request.form.get('top_or_low') if request.form.get('rounds2') else 'top'
     percent = float(request.form.get('percent')) if request.form.get('percent') else 0.2
 
@@ -67,12 +68,12 @@ def main():
                             left_layer_to_plot_data = left_layer_to_plot_data, middle_layer_to_plot_data = middle_layer_to_plot_data, right_layer_to_plot_data = right_layer_to_plot_data)
 
 def get_selections(models_base_folder):
-    # get rainable layers 
+    # get trainable layers 
     with open(f"{models_base_folder}/globals_0/0.pkl", 'rb') as f:
         ref_nn_layer_to_weights = pickle.load(f)
     
     # get clients
-    clients = os.listdir(models_base_folder)
+    clients = [name for name in os.listdir(models_base_folder) if os.path.isdir(os.path.join(models_base_folder, name))]
     clients.sort(key=lambda x: int(x.split('_')[1]))
 
     # get available comm rounds
@@ -112,18 +113,18 @@ def normalize_weights(nn_path, percent=0.2):
         
         param_1d_array = param.flatten()
 
-        # replace 0 with nan. 0 weights are most likely pruned~~~ may not be necessary, also misleading when pruning
-        # param_1d_array[param_1d_array == 0] = np.nan
-
         # take abs as we show magnitude values
         param_1d_array = np.absolute(param_1d_array)
 
-        # create ref array to get threshold after removing 0 weights (which are pruned)
-        non_0_param_1d_array = param_1d_array[param_1d_array != 0]
+        # calculate low percent (involving pruned weights)
+        pruned_percent = round(param_1d_array[param_1d_array == 0].size/param_1d_array.size, 1)
+        low_percent = percent + pruned_percent
 
-        percent_order = math.ceil(non_0_param_1d_array.size * percent)
-        low_percent_threshold = np.partition(non_0_param_1d_array, percent_order)[percent_order]
-        top_percent_threshold = np.partition(non_0_param_1d_array, -percent_order)[-percent_order]
+        top_percent_order = math.ceil(param_1d_array.size * percent)
+        low_percent_order = math.ceil(param_1d_array.size * low_percent)
+
+        low_percent_threshold = np.partition(param_1d_array, low_percent_order - 1)[low_percent_order - 1]
+        top_percent_threshold = np.partition(param_1d_array, -top_percent_order)[-top_percent_order]
 
         # reshape flatterned NN to 2D array and pad with -10 (originally as nan, but introduced difficulty in color mapping)
         side_len = math.ceil(math.sqrt(param_1d_array.size))
@@ -131,19 +132,22 @@ def normalize_weights(nn_path, percent=0.2):
         param_2d_array = np.pad(param_1d_array.astype(float), (0, side_len*side_len - param_1d_array.size), 
             mode='constant', constant_values=-10).reshape(side_len,side_len)
 
-        # change top weights to 3
-        param_2d_array[np.where(param_2d_array >= top_percent_threshold)] = 3
+        display_2d_array = np.empty_like(param_2d_array)
+        display_2d_array[:] = -10
 
         # change middle elements to 2
-        param_2d_array[np.where((param_2d_array > low_percent_threshold) & (param_2d_array < top_percent_threshold))] = 2
+        display_2d_array[np.where((param_2d_array > low_percent_threshold) & (param_2d_array < top_percent_threshold))] = 2
 
         # change low weights to 1
-        param_2d_array[np.where((0 < param_2d_array) & (param_2d_array <= low_percent_threshold))] = 1
+        display_2d_array[np.where((0 < param_2d_array) & (param_2d_array <= low_percent_threshold))] = 1
+
+        # change top weights to 3, may overwrite low weights when network reaches target pruning rate
+        display_2d_array[np.where(param_2d_array >= top_percent_threshold)] = 3
 
         # keep pruned weights 0
-        param_2d_array[param_2d_array == 0] = 0
+        display_2d_array[param_2d_array == 0] = 0
 
-        layer_to_matrix[layer.split(".")[0]] = param_2d_array
+        layer_to_matrix[layer.split(".")[0]] = display_2d_array.astype(int)
 
     return layer_to_matrix
 
@@ -161,9 +165,9 @@ def display_weights_single_net(nn_path, nn1_or_nn2, top_or_low = 3, percent=0.2)
 
     layer_to_figs = {}
 
-    # nn1 -> green, nn2 -> blue
+    # nn1 -> lime, nn2 -> blue
     weight_color_rgb = np.array([0, 0, 255]) if nn1_or_nn2 == 1 else np.array([0, 255, 0])
-    weight_color = 'blue' if nn1_or_nn2 == 1 else 'green'
+    weight_color = 'blue' if nn1_or_nn2 == 1 else 'lime'
 
     for layer, weights in nn_layer_to_matrix.items():
 
@@ -184,7 +188,10 @@ def display_weights_single_net(nn_path, nn1_or_nn2, top_or_low = 3, percent=0.2)
         data_3d = np.ndarray(shape=(weights.shape[0], weights.shape[1], 3), dtype=int)
         for i in range(0, weights.shape[0]):
             for j in range(0, weights.shape[1]):
-                data_3d[i][j] = color_map[weights[i][j]]
+                try:
+                    data_3d[i][j] = color_map[weights[i][j]]
+                except:
+                    print(weights)
 
         c = ax.matshow(data_3d,
                     interpolation ='nearest',
@@ -195,14 +202,15 @@ def display_weights_single_net(nn_path, nn1_or_nn2, top_or_low = 3, percent=0.2)
         
         # fig.colorbar(c, ax = ax)
         top_or_low_indicator = 'Top' if top_or_low == 3 else 'Low'
+        patch_0 = mpatches.Patch(color='white', label=f'Padding')
         patch_1 = mpatches.Patch(color='black', label=f'Pruned')
         patch_2 = mpatches.Patch(color=weight_color, label=f'{top_or_low_indicator} {percent:.0%}')
 
-        ax.legend(handles=[patch_1, patch_2])
+        ax.legend(handles=[patch_0, patch_1, patch_2])
 
         fig.suptitle(f"{layer} - {client_index} {top_or_low_indicator} {percent:.0%}", fontsize=20)
 
-        # fig.savefig(f'/Users/chenhang/Downloads/{name}.png')
+        fig.savefig(f"{nn_path.split('.')[0]}.png")
         
         layer_to_figs[layer] = fig
 
@@ -240,6 +248,9 @@ def compare_weights_change(nn_1_path, nn_2_path, top_or_low = 3, percent=0.2):
 
         # calculate change percentage
         entire_counts = (weights == top_or_low).sum()
+        if entire_counts == 0:
+            # when model reaches target pruning rate, low(1) are overwritten by top(3) so entire_counts will be 0
+            entire_counts = (weights == 3).sum() # -> LOW still has bug, DO NOT USE
         nn2_perc = (nn2_unique == 3).sum()/entire_counts
         same_perc = (same_weights == 2).sum()/entire_counts
         nn1_perc = (nn1_unique == 1).sum()/entire_counts
@@ -249,7 +260,7 @@ def compare_weights_change(nn_1_path, nn_2_path, top_or_low = 3, percent=0.2):
         color_map = {0: np.array([255, 255, 255]), # while - nothing
                     1: np.array([0, 0, 255]), # blue - nn1_unique
                     2: np.array([255, 0, 0]), # red - same
-                    3: np.array([0, 255, 0])} # green - nn2_unique 
+                    3: np.array([0, 255, 0])} # lime - nn2_unique 
 
         # make a 3d numpy array that has a color channel dimension   
         data_3d = np.ndarray(shape=(display_arr.shape[0], display_arr.shape[1], 3), dtype=int)
@@ -267,7 +278,7 @@ def compare_weights_change(nn_1_path, nn_2_path, top_or_low = 3, percent=0.2):
         
         # fig.colorbar(c, ax = ax)
         top_or_low_indicator = 'Top' if top_or_low == 3 else 'Low'
-        patch_1 = mpatches.Patch(color='green', label=f'NN2 - {nn2_perc:.2%}')
+        patch_1 = mpatches.Patch(color='lime', label=f'NN2 - {nn2_perc:.2%}')
         patch_2 = mpatches.Patch(color='red', label=f'Same - {same_perc:.2%}')
         patch_3 = mpatches.Patch(color='blue', label=f'NN1 - {nn1_perc:.2%}')
 
