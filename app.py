@@ -33,7 +33,7 @@ app = Flask(__name__)
 Bootstrap(app)
 
 # models_base_folder = "/Users/chenhang/Downloads/models"
-models_base_folder = "/Users/chenhang/Downloads/models_4_mal"
+models_base_folder = "/Users/chenhang/Documents/Temp/11262022_011637_60/models"
 
 @app.route("/", methods=['GET', 'POST'])
 def main():
@@ -43,9 +43,9 @@ def main():
 
     # get selections from front-end
     clientA = request.form.get('clientsA') if request.form.get('clientsA') else "globals_0"
-    clientB = request.form.get('clientsB') if request.form.get('clientsB') else "client_7"
-    roundA = request.form.get('roundsA') if request.form.get('roundsA') else 0
-    roundB = request.form.get('roundsB') if request.form.get('roundsB') else 1
+    clientB = request.form.get('clientsB') if request.form.get('clientsB') else "L_[3, 5, 7]_7"
+    roundA = request.form.get('roundsA') if request.form.get('roundsA') else "R0"
+    roundB = request.form.get('roundsB') if request.form.get('roundsB') else "R1_E10"
     top_or_low = request.form.get('top_or_low') if request.form.get('roundsB') else 'top'
     percent = float(request.form.get('percent')) if request.form.get('percent') else 0.2
 
@@ -71,11 +71,16 @@ def get_selections(models_base_folder):
     
     # get clients
     clients = [name for name in os.listdir(models_base_folder) if os.path.isdir(os.path.join(models_base_folder, name))]
-    clients.sort(key=lambda x: int(x.split('_')[1]))
+    clients.sort(key=lambda x: int(x.split('_')[-1]))
 
-    # get available comm rounds
-    selectable_rounds = [f.split('.')[0] for f in listdir(f"{models_base_folder}/globals_0") if isfile(join(f"{models_base_folder}/globals_0", f))]
-    selectable_rounds.sort(key=int)
+    # get available comm rounds for local models
+    selectable_rounds = [f.split('.')[0] for f in listdir(f"{models_base_folder}/{clients[1]}") if isfile(join(f"{models_base_folder}/{clients[1]}", f))]
+    selectable_rounds.sort(key=lambda x: (int(x.split('_')[0][1:]), int(x.split('_')[1].split(".")[0][1:])))
+
+    # get available comm rounds for global models
+    global_rounds = [f.split('.')[0] for f in listdir(f"{models_base_folder}/globals_0") if isfile(join(f"{models_base_folder}/globals_0", f))]
+    global_rounds.sort(key=lambda x: int(x[1:]))
+    selectable_rounds = global_rounds + selectable_rounds
    
     return clients, selectable_rounds
 
@@ -122,9 +127,9 @@ def normalize_weights(nn_path, top_or_low, percent=0.2):
         percent_order = math.ceil(param_1d_array.size * display_percent)
 
         if top_or_low == 'top':
-            percent_threshold = np.partition(param_1d_array, -percent_order)[-percent_order]
+            percent_threshold = -np.sort(-param_1d_array)[percent_order]
         elif top_or_low == 'low':
-            percent_threshold = np.partition(param_1d_array, percent_order - 1)[percent_order - 1]
+            percent_threshold = np.sort(param_1d_array)[percent_order]
 
         # reshape flatterned NN to 2D array and pad with nan
         side_len = math.ceil(math.sqrt(param_1d_array.size))
@@ -140,14 +145,14 @@ def normalize_weights(nn_path, top_or_low, percent=0.2):
 
         if top_or_low == 'top':
             # change top weights to 2
-            display_2d_array[np.where(param_2d_array >= percent_threshold)] = 2
+            display_2d_array[np.where(param_2d_array > percent_threshold)] = 2
             # change other weights to 1
             display_2d_array[np.where(param_2d_array < percent_threshold)] = 1
             # keep pruned weights 0, may overwrite some top weights if (1 - specified top show percent) > pruned_percent
             display_2d_array[param_2d_array == 0] = 0
         elif top_or_low == 'low':
             # change low weights to 2
-            display_2d_array[np.where(param_2d_array <= percent_threshold)] = 2
+            display_2d_array[np.where(param_2d_array < percent_threshold)] = 2
             # change other weights to 1
             display_2d_array[np.where(param_2d_array > percent_threshold)] = 1
             # keep pruned weights 0, may overwrite some low weights
